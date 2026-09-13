@@ -204,30 +204,15 @@
   }
   .taskRow.mine{border-left-color:var(--owner-a);}
   .taskRow.theirs{border-left-color:var(--owner-b);}
-  .taskRow.dragging{
-    opacity:0.85;
-    box-shadow:0 8px 20px rgba(20,28,24,0.18);
-    z-index:15;
-    position:relative;
-  }
   .taskRow.ghost{
     border-left-color:var(--taupe);
     background:var(--taupe-dim);
     align-items:center;
   }
-  .dragHandle{
-    background:none;
-    border:none;
-    color:var(--line);
-    font-size:18px;
-    line-height:1;
-    padding:2px 4px;
-    touch-action:none;
-    cursor:grab;
-    flex-shrink:0;
-    align-self:center;
-  }
-  .dragHandle:hover{color:var(--ink-soft);}
+  .orderBtns{display:flex; flex-direction:column; gap:2px; flex-shrink:0;}
+  .orderBtns .iconBtn{width:22px; height:22px; font-size:13px;}
+  .orderBtns .iconBtn:disabled{opacity:0.25; cursor:default;}
+  .orderBtns .iconBtn:disabled:hover{background:none;}
   .checkWrap{padding-top:2px;}
   .checkbox{
     width:20px; height:20px;
@@ -587,8 +572,6 @@ let categoryFilterValue = "";
 let groupFilterValue = "";
 let assigneeFilterValue = "";
 let isSignUpMode = false;
-let dragEl = null;
-let dragPointerId = null;
 
 /* ---------------- auth UI ---------------- */
 const authForm = document.getElementById('authForm');
@@ -791,6 +774,9 @@ function render(){
     return true;
   });
   visible.sort((a, b) => effectiveOrder(a) - effectiveOrder(b));
+  const nonGhostIds = visible
+    .filter(t => !(t.visibility === 'private' && t.ownerUid !== currentUser.uid))
+    .map(t => t.id);
 
   if(visible.length === 0){
     empty.style.display = 'block';
@@ -838,10 +824,16 @@ function render(){
     const subBadge = sub ? `<span class="badge subgroup">${escapeHtml(sub)}</span>` : '';
     const canTake = t.visibility === 'shared' && !assignedToMe && !t.done;
     const isMineToEdit = t.ownerUid === currentUser.uid;
-    const showHandle = activeTab === 'active';
+    const showMoveBtns = activeTab === 'active';
+    const isFirst = nonGhostIds[0] === t.id;
+    const isLast = nonGhostIds[nonGhostIds.length - 1] === t.id;
 
     row.innerHTML = `
-      ${showHandle ? `<button class="dragHandle" data-id="${t.id}" aria-label="Drag to reorder">⠿</button>` : ''}
+      ${showMoveBtns ? `
+      <div class="orderBtns">
+        <button class="iconBtn" data-id="${t.id}" data-action="moveUp" aria-label="Move up" ${isFirst ? 'disabled' : ''}>▲</button>
+        <button class="iconBtn" data-id="${t.id}" data-action="moveDown" aria-label="Move down" ${isLast ? 'disabled' : ''}>▼</button>
+      </div>` : ''}
       <div class="checkWrap">
         <button class="checkbox ${t.done ? 'checked' : ''}" data-id="${t.id}" data-action="toggle" aria-label="Mark done">
           <svg viewBox="0 0 24 24" fill="none"><path d="M4 12l6 6L20 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -878,7 +870,8 @@ function escapeHtml(s){
 }
 function escapeAttr(s){ return escapeHtml(s).replace(/"/g, '&quot;'); }
 
-document.getElementById('taskList').addEventListener('click', async (e) => {
+const taskListEl = document.getElementById('taskList');
+taskListEl.addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-action]');
   if(!btn) return;
   const id = btn.dataset.id;
@@ -903,70 +896,30 @@ document.getElementById('taskList').addEventListener('click', async (e) => {
       showToast("It's yours now.");
     } catch(err){ showToast('Could not take this task.'); }
   }
-});
-
-/* ---------------- drag to reorder ---------------- */
-const taskListEl = document.getElementById('taskList');
-
-taskListEl.addEventListener('pointerdown', (e) => {
-  const handle = e.target.closest('.dragHandle');
-  if(!handle) return;
-  const row = handle.closest('.taskRow');
-  if(!row) return;
-  dragEl = row;
-  dragPointerId = e.pointerId;
-  try{ row.setPointerCapture(dragPointerId); } catch(err){}
-  row.classList.add('dragging');
-  e.preventDefault();
-});
-
-taskListEl.addEventListener('pointermove', (e) => {
-  if(!dragEl || e.pointerId !== dragPointerId) return;
-  const rows = Array.from(taskListEl.querySelectorAll('.taskRow:not(.ghost)'));
-  const y = e.clientY;
-  for(const sib of rows){
-    if(sib === dragEl) continue;
-    const rect = sib.getBoundingClientRect();
-    const mid = rect.top + rect.height / 2;
-    if(y < mid && sib.previousElementSibling !== dragEl){
-      taskListEl.insertBefore(dragEl, sib);
-      break;
-    } else if(y >= mid && sib.nextElementSibling !== dragEl){
-      taskListEl.insertBefore(dragEl, sib.nextSibling);
-      break;
-    }
+  if(btn.dataset.action === 'moveUp' || btn.dataset.action === 'moveDown'){
+    await moveTask(id, btn.dataset.action === 'moveUp' ? 'up' : 'down');
   }
 });
 
-async function finishDrag(){
-  if(!dragEl) return;
-  dragEl.classList.remove('dragging');
-  const id = dragEl.dataset.id;
+/* ---------------- reorder (up/down) ---------------- */
+async function moveTask(id, direction){
   const rows = Array.from(taskListEl.querySelectorAll('.taskRow:not(.ghost)'));
-  const idx = rows.indexOf(dragEl);
-  const prevOrder = idx > 0 ? parseFloat(rows[idx - 1].dataset.order) : null;
-  const nextOrder = idx < rows.length - 1 ? parseFloat(rows[idx + 1].dataset.order) : null;
-  let newOrder;
-  if(prevOrder === null && nextOrder === null) newOrder = Date.now();
-  else if(prevOrder === null) newOrder = nextOrder - 1000;
-  else if(nextOrder === null) newOrder = prevOrder + 1000;
-  else newOrder = (prevOrder + nextOrder) / 2;
-  dragEl = null;
-  dragPointerId = null;
+  const idx = rows.findIndex(r => r.dataset.id === id);
+  if(idx === -1) return;
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if(swapIdx < 0 || swapIdx >= rows.length) return;
+  const a = allTasks.find(t => t.id === id);
+  const b = allTasks.find(t => t.id === rows[swapIdx].dataset.id);
+  if(!a || !b) return;
+  const aOrder = effectiveOrder(a);
+  const bOrder = effectiveOrder(b);
   try{
-    await updateDoc(doc(db, 'tasks', id), { order: newOrder });
-  } catch(err){ showToast('Could not save new order.'); }
+    await Promise.all([
+      updateDoc(doc(db, 'tasks', a.id), { order: bOrder }),
+      updateDoc(doc(db, 'tasks', b.id), { order: aOrder })
+    ]);
+  } catch(err){ showToast('Could not reorder.'); }
 }
-
-taskListEl.addEventListener('pointerup', (e) => {
-  if(!dragEl || e.pointerId !== dragPointerId) return;
-  finishDrag();
-});
-taskListEl.addEventListener('pointercancel', () => {
-  if(dragEl) dragEl.classList.remove('dragging');
-  dragEl = null;
-  dragPointerId = null;
-});
 
 /* ---------------- add/edit sheet ---------------- */
 const sheetBackdrop = document.getElementById('sheetBackdrop');
