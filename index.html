@@ -150,7 +150,6 @@
     padding:18px 16px 100px;
   }
 
-  .controlsRow{display:flex; gap:8px; margin-bottom:14px;}
   .tabs{
     display:flex;
     gap:6px;
@@ -158,7 +157,7 @@
     border:1px solid var(--line);
     border-radius:10px;
     padding:4px;
-    flex:1;
+    margin-bottom:10px;
   }
   .tabBtn{
     flex:1;
@@ -171,15 +170,25 @@
     color:var(--ink-soft);
   }
   .tabBtn.active{background:var(--forest); color:#fff;}
-  .groupSelect{
+
+  .filterRow{
+    display:flex;
+    gap:8px;
+    margin-bottom:14px;
+    overflow-x:auto;
+    padding-bottom:2px;
+  }
+  .filterSelect{
     border:1px solid var(--line);
     background:var(--panel);
     border-radius:10px;
-    padding:0 10px;
+    padding:7px 10px;
     font-size:13px;
     color:var(--ink-soft);
-    max-width:150px;
+    flex:1 0 110px;
+    min-width:110px;
   }
+  .filterSelect:disabled{opacity:0.5;}
 
   .taskList{display:flex; flex-direction:column; gap:10px;}
 
@@ -187,19 +196,38 @@
     background:var(--panel);
     border:1px solid var(--line);
     border-radius:var(--radius);
-    padding:14px 14px 14px 12px;
+    padding:14px 14px 14px 10px;
     display:flex;
-    gap:12px;
+    gap:10px;
     align-items:flex-start;
     border-left:4px solid var(--owner-a);
   }
   .taskRow.mine{border-left-color:var(--owner-a);}
   .taskRow.theirs{border-left-color:var(--owner-b);}
+  .taskRow.dragging{
+    opacity:0.85;
+    box-shadow:0 8px 20px rgba(20,28,24,0.18);
+    z-index:15;
+    position:relative;
+  }
   .taskRow.ghost{
     border-left-color:var(--taupe);
     background:var(--taupe-dim);
     align-items:center;
   }
+  .dragHandle{
+    background:none;
+    border:none;
+    color:var(--line);
+    font-size:18px;
+    line-height:1;
+    padding:2px 4px;
+    touch-action:none;
+    cursor:grab;
+    flex-shrink:0;
+    align-self:center;
+  }
+  .dragHandle:hover{color:var(--ink-soft);}
   .checkWrap{padding-top:2px;}
   .checkbox{
     width:20px; height:20px;
@@ -228,7 +256,8 @@
     flex-shrink:0;
   }
   .badge.private{background:var(--taupe-dim); color:var(--taupe);}
-  .badge.group{background:var(--forest-dim); color:var(--forest);}
+  .badge.category{background:var(--forest-dim); color:var(--forest);}
+  .badge.subgroup{background:var(--owner-a-dim); color:var(--owner-a);}
   .taskDesc{font-size:13px; color:var(--ink-soft); margin-top:3px; word-break:break-word;}
   .taskMeta{display:flex; gap:10px; margin-top:7px; flex-wrap:wrap; align-items:center;}
   .metaChip{
@@ -341,7 +370,6 @@
   }
   .btnDanger{color:var(--coral); border-color:#F0D2CB;}
   .btnPrimary.inSheet{flex:1.4;}
-  .hint{font-size:11.5px; color:var(--ink-soft); margin-top:-8px; margin-bottom:14px;}
 
   .toast{
     position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
@@ -396,13 +424,22 @@
   </header>
 
   <main>
-    <div class="controlsRow">
-      <div class="tabs">
-        <button class="tabBtn active" data-tab="active">Active</button>
-        <button class="tabBtn" data-tab="completed">Completed</button>
-      </div>
-      <select class="groupSelect" id="groupFilter">
-        <option value="">All groups</option>
+    <div class="tabs">
+      <button class="tabBtn active" data-tab="active">Active</button>
+      <button class="tabBtn" data-tab="completed">Completed</button>
+    </div>
+
+    <div class="filterRow">
+      <select class="filterSelect" id="categoryFilter">
+        <option value="">All categories</option>
+      </select>
+      <select class="filterSelect" id="groupFilter" disabled>
+        <option value="">All in category</option>
+      </select>
+      <select class="filterSelect" id="assigneeFilter">
+        <option value="">Everyone</option>
+        <option value="mine">Mine</option>
+        <option value="partner" id="partnerOption">Partner</option>
       </select>
     </div>
 
@@ -447,9 +484,17 @@
         <label for="endDateInput">Ends (optional — for a task spanning days, e.g. a trip away)</label>
         <input type="date" id="endDateInput" />
       </div>
-      <div class="field">
-        <label for="groupInput">Group (optional)</label>
-        <input type="text" id="groupInput" maxlength="60" placeholder="e.g. Son's exchange" />
+      <div class="fieldRow">
+        <div class="field">
+          <label for="categoryInput">Category (optional)</label>
+          <input type="text" id="categoryInput" list="categoryDatalist" maxlength="60" placeholder="e.g. Emma" />
+          <datalist id="categoryDatalist"></datalist>
+        </div>
+        <div class="field">
+          <label for="subgroupInput">Group (optional, within category)</label>
+          <input type="text" id="subgroupInput" list="subgroupDatalist" maxlength="60" placeholder="e.g. Exchange prep" />
+          <datalist id="subgroupDatalist"></datalist>
+        </div>
       </div>
       <div class="field">
         <label for="linkInput">Link to more detail (optional)</label>
@@ -494,14 +539,14 @@
             allow delete: if request.auth != null
               && resource.data.ownerUid == request.auth.uid;
             // Owner (creator) can change anything. Anyone signed in can
-            // also flip done/completedAt, or take over a SHARED task
-            // (assignedUid/assignedName) — private tasks and every
-            // other field stay owner-only.
+            // also flip done/completedAt, take over a SHARED task
+            // (assignedUid/assignedName), or drag-reorder it (order) —
+            // private tasks and every other field stay owner-only.
             allow update: if request.auth != null && (
               resource.data.ownerUid == request.auth.uid ||
               (resource.data.visibility == 'shared' &&
                request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['done', 'completedAt', 'assignedUid', 'assignedName']))
+                 .hasOnly(['done', 'completedAt', 'assignedUid', 'assignedName', 'order']))
             );
           }
         }
@@ -538,8 +583,12 @@ const db = getFirestore(fb);
 let currentUser = null;
 let allTasks = [];
 let activeTab = "active";
+let categoryFilterValue = "";
 let groupFilterValue = "";
+let assigneeFilterValue = "";
 let isSignUpMode = false;
+let dragEl = null;
+let dragPointerId = null;
 
 /* ---------------- auth UI ---------------- */
 const authForm = document.getElementById('authForm');
@@ -611,7 +660,9 @@ onAuthStateChanged(auth, (user) => {
     const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
     unsubscribeTasks = onSnapshot(q, (snap) => {
       allTasks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      renderGroupOptions();
+      renderCategoryFilterOptions();
+      renderGroupFilterOptions();
+      document.getElementById('partnerOption').textContent = computePartnerName();
       render();
     }, (err) => {
       showToast('Could not load tasks — check Firestore rules.');
@@ -625,7 +676,7 @@ onAuthStateChanged(auth, (user) => {
   }
 });
 
-/* ---------------- tabs & group filter ---------------- */
+/* ---------------- tabs & filters ---------------- */
 document.querySelectorAll('.tabBtn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tabBtn').forEach(b => b.classList.remove('active'));
@@ -635,22 +686,65 @@ document.querySelectorAll('.tabBtn').forEach(btn => {
   });
 });
 
+document.getElementById('categoryFilter').addEventListener('change', (e) => {
+  categoryFilterValue = e.target.value;
+  groupFilterValue = '';
+  renderGroupFilterOptions();
+  render();
+});
 document.getElementById('groupFilter').addEventListener('change', (e) => {
   groupFilterValue = e.target.value;
   render();
 });
+document.getElementById('assigneeFilter').addEventListener('change', (e) => {
+  assigneeFilterValue = e.target.value;
+  render();
+});
 
-function renderGroupOptions(){
-  const sel = document.getElementById('groupFilter');
+function eligibleForFilters(t){
+  return !(t.visibility === 'private' && t.ownerUid !== currentUser.uid);
+}
+function effectiveCategory(t){ return t.category || t.group || null; }
+function effectiveSubgroup(t){ return t.category ? (t.group || null) : null; }
+
+function renderCategoryFilterOptions(){
+  const sel = document.getElementById('categoryFilter');
   const current = sel.value;
-  const groups = Array.from(new Set(
-    allTasks
-      .filter(t => t.group && !(t.visibility === 'private' && t.ownerUid !== currentUser.uid))
-      .map(t => t.group)
+  const cats = Array.from(new Set(allTasks.filter(eligibleForFilters).map(effectiveCategory).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">All categories</option>' +
+    cats.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join('');
+  if(cats.includes(current)){ sel.value = current; } else { categoryFilterValue = ''; }
+}
+
+function renderGroupFilterOptions(){
+  const sel = document.getElementById('groupFilter');
+  if(!categoryFilterValue){
+    sel.innerHTML = '<option value="">All in category</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const subs = Array.from(new Set(
+    allTasks.filter(t => eligibleForFilters(t) && effectiveCategory(t) === categoryFilterValue)
+      .map(effectiveSubgroup).filter(Boolean)
   )).sort();
-  sel.innerHTML = '<option value="">All groups</option>' +
-    groups.map(g => `<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join('');
-  if(groups.includes(current)) sel.value = current;
+  sel.innerHTML = '<option value="">All in category</option>' +
+    subs.map(g => `<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join('');
+}
+
+function computePartnerName(){
+  for(const t of allTasks){
+    if(t.ownerUid && t.ownerUid !== currentUser.uid) return t.ownerName || 'Partner';
+    if(t.assignedUid && t.assignedUid !== currentUser.uid) return t.assignedName || 'Partner';
+  }
+  return 'Partner';
+}
+
+/* ---------------- ordering ---------------- */
+function effectiveOrder(t){
+  if(t.order !== undefined && t.order !== null) return t.order;
+  if(t.createdAt && typeof t.createdAt.toMillis === 'function') return t.createdAt.toMillis();
+  return 0;
 }
 
 /* ---------------- render ---------------- */
@@ -689,9 +783,14 @@ function render(){
     const isDone = !!t.done;
     if(activeTab === 'active' && isDone) return false;
     if(activeTab === 'completed' && !isDone) return false;
-    if(groupFilterValue && t.group !== groupFilterValue) return false;
+    if(categoryFilterValue && effectiveCategory(t) !== categoryFilterValue) return false;
+    if(groupFilterValue && effectiveSubgroup(t) !== groupFilterValue) return false;
+    const assignedUid = t.assignedUid || t.ownerUid;
+    if(assigneeFilterValue === 'mine' && assignedUid !== currentUser.uid) return false;
+    if(assigneeFilterValue === 'partner' && assignedUid === currentUser.uid) return false;
     return true;
   });
+  visible.sort((a, b) => effectiveOrder(a) - effectiveOrder(b));
 
   if(visible.length === 0){
     empty.style.display = 'block';
@@ -710,6 +809,8 @@ function render(){
 
     const row = document.createElement('div');
     row.className = 'taskRow ' + (assignedToMe ? 'mine' : 'theirs') + (t.done ? ' done' : '') + (isGhost ? ' ghost' : '');
+    row.dataset.id = t.id;
+    row.dataset.order = effectiveOrder(t);
 
     if(isGhost){
       row.innerHTML = `
@@ -731,11 +832,16 @@ function render(){
     const createdByNote = (t.ownerUid !== assignedUid)
       ? `<span class="createdByNote">— added by ${escapeHtml(t.ownerUid === currentUser.uid ? (currentUser.displayName || 'you') : (t.ownerName || 'partner'))}</span>`
       : '';
-    const groupBadge = t.group ? `<span class="badge group">${escapeHtml(t.group)}</span>` : '';
+    const cat = effectiveCategory(t);
+    const sub = effectiveSubgroup(t);
+    const catBadge = cat ? `<span class="badge category">${escapeHtml(cat)}</span>` : '';
+    const subBadge = sub ? `<span class="badge subgroup">${escapeHtml(sub)}</span>` : '';
     const canTake = t.visibility === 'shared' && !assignedToMe && !t.done;
     const isMineToEdit = t.ownerUid === currentUser.uid;
+    const showHandle = activeTab === 'active';
 
     row.innerHTML = `
+      ${showHandle ? `<button class="dragHandle" data-id="${t.id}" aria-label="Drag to reorder">⠿</button>` : ''}
       <div class="checkWrap">
         <button class="checkbox ${t.done ? 'checked' : ''}" data-id="${t.id}" data-action="toggle" aria-label="Mark done">
           <svg viewBox="0 0 24 24" fill="none"><path d="M4 12l6 6L20 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -745,7 +851,8 @@ function render(){
         <div class="taskTitleRow">
           <span class="taskTitle">${escapeHtml(t.title)}</span>
           ${t.visibility === 'private' ? '<span class="badge private">Private</span>' : ''}
-          ${groupBadge}
+          ${catBadge}
+          ${subBadge}
         </div>
         ${t.description ? `<div class="taskDesc">${escapeHtml(t.description)}</div>` : ''}
         <div class="taskMeta">
@@ -798,6 +905,69 @@ document.getElementById('taskList').addEventListener('click', async (e) => {
   }
 });
 
+/* ---------------- drag to reorder ---------------- */
+const taskListEl = document.getElementById('taskList');
+
+taskListEl.addEventListener('pointerdown', (e) => {
+  const handle = e.target.closest('.dragHandle');
+  if(!handle) return;
+  const row = handle.closest('.taskRow');
+  if(!row) return;
+  dragEl = row;
+  dragPointerId = e.pointerId;
+  try{ row.setPointerCapture(dragPointerId); } catch(err){}
+  row.classList.add('dragging');
+  e.preventDefault();
+});
+
+taskListEl.addEventListener('pointermove', (e) => {
+  if(!dragEl || e.pointerId !== dragPointerId) return;
+  const rows = Array.from(taskListEl.querySelectorAll('.taskRow:not(.ghost)'));
+  const y = e.clientY;
+  for(const sib of rows){
+    if(sib === dragEl) continue;
+    const rect = sib.getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    if(y < mid && sib.previousElementSibling !== dragEl){
+      taskListEl.insertBefore(dragEl, sib);
+      break;
+    } else if(y >= mid && sib.nextElementSibling !== dragEl){
+      taskListEl.insertBefore(dragEl, sib.nextSibling);
+      break;
+    }
+  }
+});
+
+async function finishDrag(){
+  if(!dragEl) return;
+  dragEl.classList.remove('dragging');
+  const id = dragEl.dataset.id;
+  const rows = Array.from(taskListEl.querySelectorAll('.taskRow:not(.ghost)'));
+  const idx = rows.indexOf(dragEl);
+  const prevOrder = idx > 0 ? parseFloat(rows[idx - 1].dataset.order) : null;
+  const nextOrder = idx < rows.length - 1 ? parseFloat(rows[idx + 1].dataset.order) : null;
+  let newOrder;
+  if(prevOrder === null && nextOrder === null) newOrder = Date.now();
+  else if(prevOrder === null) newOrder = nextOrder - 1000;
+  else if(nextOrder === null) newOrder = prevOrder + 1000;
+  else newOrder = (prevOrder + nextOrder) / 2;
+  dragEl = null;
+  dragPointerId = null;
+  try{
+    await updateDoc(doc(db, 'tasks', id), { order: newOrder });
+  } catch(err){ showToast('Could not save new order.'); }
+}
+
+taskListEl.addEventListener('pointerup', (e) => {
+  if(!dragEl || e.pointerId !== dragPointerId) return;
+  finishDrag();
+});
+taskListEl.addEventListener('pointercancel', () => {
+  if(dragEl) dragEl.classList.remove('dragging');
+  dragEl = null;
+  dragPointerId = null;
+});
+
 /* ---------------- add/edit sheet ---------------- */
 const sheetBackdrop = document.getElementById('sheetBackdrop');
 const taskForm = document.getElementById('taskForm');
@@ -815,8 +985,16 @@ document.querySelectorAll('.visOpt').forEach(opt => {
   });
 });
 
+function populateDatalists(){
+  const cats = Array.from(new Set(allTasks.filter(eligibleForFilters).map(effectiveCategory).filter(Boolean))).sort();
+  const subs = Array.from(new Set(allTasks.filter(eligibleForFilters).map(effectiveSubgroup).filter(Boolean))).sort();
+  document.getElementById('categoryDatalist').innerHTML = cats.map(c => `<option value="${escapeAttr(c)}">`).join('');
+  document.getElementById('subgroupDatalist').innerHTML = subs.map(g => `<option value="${escapeAttr(g)}">`).join('');
+}
+
 function openSheet(task){
   taskForm.reset();
+  populateDatalists();
   document.querySelectorAll('.visOpt').forEach(o => o.classList.remove('selected'));
   if(task){
     document.getElementById('sheetTitle').textContent = 'Edit task';
@@ -826,7 +1004,8 @@ function openSheet(task){
     document.getElementById('deadlineInput').value = task.deadline || '';
     document.getElementById('deadlineTimeInput').value = task.deadlineTime || '';
     document.getElementById('endDateInput').value = task.endDate || '';
-    document.getElementById('groupInput').value = task.group || '';
+    document.getElementById('categoryInput').value = effectiveCategory(task) || '';
+    document.getElementById('subgroupInput').value = effectiveSubgroup(task) || '';
     document.getElementById('linkInput').value = task.link || '';
     selectedVis = task.visibility || 'shared';
     document.getElementById('saveBtn').textContent = 'Save changes';
@@ -852,7 +1031,8 @@ taskForm.addEventListener('submit', async (e) => {
     deadline: document.getElementById('deadlineInput').value || null,
     deadlineTime: document.getElementById('deadlineTimeInput').value || null,
     endDate: document.getElementById('endDateInput').value || null,
-    group: document.getElementById('groupInput').value.trim() || null,
+    category: document.getElementById('categoryInput').value.trim() || null,
+    group: document.getElementById('subgroupInput').value.trim() || null,
     link: document.getElementById('linkInput').value.trim() || null,
     visibility: selectedVis
   };
@@ -862,6 +1042,7 @@ taskForm.addEventListener('submit', async (e) => {
     if(id){
       await updateDoc(doc(db, 'tasks', id), payload);
     } else {
+      const minOrder = allTasks.length ? Math.min(...allTasks.map(effectiveOrder)) : Date.now();
       await addDoc(collection(db, 'tasks'), {
         ...payload,
         ownerUid: currentUser.uid,
@@ -870,6 +1051,7 @@ taskForm.addEventListener('submit', async (e) => {
         assignedName: currentUser.displayName || currentUser.email,
         done: false,
         completedAt: null,
+        order: minOrder - 1000,
         createdAt: serverTimestamp()
       });
     }
